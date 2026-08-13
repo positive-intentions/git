@@ -1,0 +1,45 @@
+# Standalone package (not a member of the parent git workspace).
+[workspace]
+
+[package]
+name = "git-gallery"
+version = "0.1.0"
+edition = "2021"
+description = "Dioxus gallery demos for git-core (gix / isomorphic-git)"
+license = "MIT OR Apache-2.0"
+publish = false
+default-run = "git-gallery"
+
+[[bin]]
+name = "git-gallery"
+path = "src/main.rs"
+required-features = ["gui"]
+
+[dependencies]
+dioxus = { version = "0.6.0", features = ["router"], optional = true }
+git-core = { path = "../git-core" }
+whatsup-ui = { git = "https://github.com/positive-intentions/whatsup-ui", default-features = false, features = [
+  "gallery",
+] }
+getrandom = { version = "0.2", features = ["js"], optional = true }
+
+[features]
+default = ["web"]
+gui = ["dep:dioxus"]
+web = ["gui", "dioxus/web", "whatsup-ui/web", "dep:getrandom"]
+desktop = ["gui", "dioxus/desktop", "whatsup-ui/desktop"]
+
+[patch."https://github.com/positive-intentions/whatsup-ui"]
+whatsup-ui = { path = "../../whatsup-ui" }
+
+[profile]
+
+[profile.wasm-dev]
+inherits = "dev"
+opt-level = 1
+
+[profile.server-dev]
+inherits = "dev"
+
+[profile.android-dev]
+inherits = "dev"

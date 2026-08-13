@@ -1,0 +1,197 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, staging]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.89"
+          components: rustfmt
+
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.89"
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: clippy
+
+      - run: cargo clippy -p git-core --all-targets -- -D warnings
+
+  test:
+    name: Test (Rust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.89"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test
+
+      - run: cargo test -p git-core
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage-nightly
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate lcov and enforce line gate
+        run: >
+          cargo +nightly llvm-cov -p git-core
+          --fail-under-lines 100
+          --lcov --output-path lcov.info
+          --summary-only
+
+      - name: Upload lcov
+        uses: actions/upload-artifact@v4
+        with:
+          name: lcov
+          path: lcov.info
+
+  test-js:
+    name: Test (JS helpers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: git-gallery/package-lock.json
+
+      - name: Install and test
+        working-directory: git-gallery
+        run: |
+          npm ci
+          npm test
+
+  test-wasm:
+    name: Test (WASM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.89"
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm-node
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Run wasm-pack Node tests
+        working-directory: git-core
+        run: wasm-pack test --node
+
+  e2e:
+    name: Gallery Playwright
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # git-gallery patches whatsup-ui to ../../whatsup-ui (sibling of this repo).
+      - name: Checkout whatsup-ui sibling
+        uses: actions/checkout@v4
+        with:
+          repository: positive-intentions/whatsup-ui
+          path: _whatsup-ui
+
+      - name: Link whatsup-ui for Cargo patch
+        run: |
+          # From git-gallery, ../../whatsup-ui → $(dirname $GITHUB_WORKSPACE)/whatsup-ui
+          ln -sfn "$GITHUB_WORKSPACE/_whatsup-ui" "$(dirname "$GITHUB_WORKSPACE")/whatsup-ui"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.89"
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: e2e-gallery
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            git-gallery/package-lock.json
+            e2e/package-lock.json
+
+      - name: Install cargo-binstall
+        run: curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+
+      - name: Install dioxus-cli
+        run: cargo binstall dioxus-cli@0.6 --locked -y
+
+      - name: Install gallery npm deps
+        working-directory: git-gallery
+        run: npm ci
+
+      - name: Build gallery (web)
+        working-directory: git-gallery
+        run: dx build --platform web --bin git-gallery
+
+      - name: Install Playwright
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install chromium --with-deps
+
+      - name: Run gallery smokes
+        working-directory: e2e
+        env:
+          CI: "true"
+        run: npx playwright test

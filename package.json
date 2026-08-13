@@ -1,0 +1,16 @@
+{
+  "name": "git",
+  "private": true,
+  "description": "Developer CLI for git-core tests, coverage, wasm, and gallery e2e",
+  "scripts": {
+    "test": "npm run test:rust && npm run test:js",
+    "test:rust": "cargo test -p git-core",
+    "test:rust:all": "cargo test -p git-core",
+    "test:rust:coverage": "cargo +nightly llvm-cov -p git-core --html --output-dir git-gallery/assets/coverage-html",
+    "test:rust:coverage:ci": "cargo +nightly llvm-cov -p git-core --fail-under-lines 100 --lcov --output-path lcov.info --summary-only",
+    "test:js": "npm --prefix git-gallery run test",
+    "test:wasm:node": "cd git-core && wasm-pack test --node",
+    "test:e2e": "npm --prefix e2e run test",
+    "install:llvm-cov": "cargo install cargo-llvm-cov --locked"
+  }
+}

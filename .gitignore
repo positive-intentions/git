@@ -1,0 +1,12 @@
+/target
+**/target
+git-gallery/node_modules
+e2e/node_modules
+e2e/test-results
+e2e/playwright-report
+.DS_Store
+dist
+/lcov.info
+/coverage
+**/coverage
+git-gallery/assets/coverage-html/

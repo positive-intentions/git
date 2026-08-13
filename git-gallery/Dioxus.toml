@@ -1,0 +1,18 @@
+[application]
+name = "git-gallery"
+default_platform = "web"
+asset_dir = "assets"
+
+[web.app]
+title = "Git Gallery"
+
+[web.watcher]
+reload_html = true
+watch_path = ["src", "assets"]
+index_on_404 = true
+
+[bundle]
+identifier = "com.positiveintentions.git-gallery"
+publisher = "positive-intentions"
+short_description = "Git demos using git-core (gix / isomorphic-git)"
+category = "DeveloperTool"
