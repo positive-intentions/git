@@ -20,6 +20,7 @@ gix = { version = "0.86", default-features = false, features = [
   "index",
   "status",
   "worktree-mutation",
+  "credentials",
   "blocking-network-client",
   "blocking-http-transport-reqwest-rust-tls",
 ] }

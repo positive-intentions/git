@@ -5,6 +5,9 @@ import {
   pathParts,
   makeStats,
   statusLabel,
+  authCallback,
+  unifiedDiff,
+  guessLanguage,
 } from "../assets/git-web-helpers.js";
 
 describe("joinPath", () => {
@@ -81,5 +84,46 @@ describe("statusLabel", () => {
     [1, 1, 2, "changed"],
   ])("maps (%i, %i, %i) -> %s", (head, workdir, stage, expected) => {
     expect(statusLabel(head, workdir, stage)).toBe(expected);
+  });
+});
+
+describe("authCallback", () => {
+  it("returns null when incomplete", () => {
+    expect(authCallback("", "t")).toBeNull();
+    expect(authCallback("u", "")).toBeNull();
+    expect(authCallback("  ", "t")).toBeNull();
+  });
+
+  it("returns onAuth that yields username/password", () => {
+    const cb = authCallback("user", "token");
+    expect(cb()).toEqual({ username: "user", password: "token" });
+  });
+});
+
+describe("unifiedDiff", () => {
+  it("returns empty for identical inputs", () => {
+    expect(unifiedDiff("a.txt", "x", "x")).toBe("");
+  });
+
+  it("emits a simple unified hunk", () => {
+    const d = unifiedDiff("a.txt", "one\ntwo", "one\nthree");
+    expect(d).toContain("diff --git a/a.txt b/a.txt");
+    expect(d).toContain("-two");
+    expect(d).toContain("+three");
+    expect(d).toContain(" one");
+  });
+});
+
+describe("guessLanguage", () => {
+  it.each([
+    ["src/main.rs", "rust"],
+    ["a.js", "javascript"],
+    ["a.ts", "typescript"],
+    ["a.json", "json"],
+    ["README.md", "markdown"],
+    ["x.unknown", "plaintext"],
+    ["noext", "plaintext"],
+  ])("%s -> %s", (path, lang) => {
+    expect(guessLanguage(path)).toBe(lang);
   });
 });

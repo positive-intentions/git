@@ -1,6 +1,7 @@
 //! Shared Git API for gallery demos.
 //!
-//! Desktop uses gitoxide (`gix`). Web uses isomorphic-git over OPFS via JS.
+//! Desktop uses gitoxide (`gix`) plus system `git` for push / some mutations.
+//! Web uses isomorphic-git over OPFS via JS.
 
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
@@ -8,7 +9,7 @@ mod error;
 mod types;
 
 pub use error::{Error, Result};
-pub use types::{DirEntry, StatusEntry};
+pub use types::{BranchInfo, CommitInfo, DirEntry, GitAuth, RemoteOpts, Signature, StatusEntry};
 
 use async_trait::async_trait;
 
@@ -23,9 +24,10 @@ pub trait GitRepo: Sized {
 
     /// Clone `url` into `workdir`.
     ///
-    /// On web, `cors_proxy` is required for cross-origin remotes (e.g.
+    /// On web, `opts.cors_proxy` is required for cross-origin remotes (e.g.
     /// `https://cors.isomorphic-git.org`). Ignored on native.
-    async fn clone(url: &str, workdir: &str, cors_proxy: Option<&str>) -> Result<Self>;
+    /// Credentials in `opts.auth` are used only for this request.
+    async fn clone(url: &str, workdir: &str, opts: &RemoteOpts) -> Result<Self>;
 
     /// List files and directories under `rel` (relative to the worktree root).
     /// Use `""` or `"."` for the root.
@@ -42,6 +44,35 @@ pub trait GitRepo: Sized {
 
     /// Working tree / index status entries.
     async fn status(&self) -> Result<Vec<StatusEntry>>;
+
+    /// Commit the index with `message` and `author` (also used as committer).
+    /// Returns the new commit object id (hex).
+    async fn commit(&self, message: &str, author: &Signature) -> Result<String>;
+
+    /// Fetch from `origin` (fast network update of remotes).
+    async fn fetch(&self, opts: &RemoteOpts) -> Result<()>;
+
+    /// Fast-forward pull from `origin` into the current branch.
+    /// Fails if a merge would be required.
+    async fn pull(&self, opts: &RemoteOpts) -> Result<()>;
+
+    /// Push the current branch to `origin`.
+    async fn push(&self, opts: &RemoteOpts) -> Result<()>;
+
+    /// List local branches.
+    async fn list_branches(&self) -> Result<Vec<BranchInfo>>;
+
+    /// Create a new local branch at HEAD (does not switch).
+    async fn create_branch(&self, name: &str) -> Result<()>;
+
+    /// Check out an existing local branch (updates worktree).
+    async fn checkout(&self, name: &str) -> Result<()>;
+
+    /// Recent commits (newest first), up to `max` entries.
+    async fn log(&self, max: usize) -> Result<Vec<CommitInfo>>;
+
+    /// Unified diff of worktree file `rel` vs HEAD (empty string if unchanged / new).
+    async fn diff_file(&self, rel: &str) -> Result<String>;
 
     /// Absolute (or OPFS) workdir path for this repository.
     fn workdir(&self) -> &str;

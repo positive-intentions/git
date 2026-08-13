@@ -64,10 +64,12 @@ Open the printed URL. Stories that only `init` / read / write / status work offl
 | Init | `GitRepo::init` in a throwaway workdir |
 | Files | write / read / edit / remove / list files & folders |
 | Status | mutations then `GitRepo::status` |
-| Clone | `GitRepo::clone` (optional URL + CORS proxy knobs) |
+| Clone | Authenticated clone + commit / branches / log / diff / fetch / FF-pull / push; Monaco editor on web |
 
-There is **no** full file editor, commit, branch, or push — only enough to prove the
-shared API works on both platforms.
+The **Clone** story is the full workflow debugger. Connection fields (URL, username,
+access token, CORS proxy) live in the demo pane and persist in `localStorage` on web.
+Monaco is gallery-only (web); desktop uses a textarea. Core git operations work on both
+backends via the shared `GitRepo` trait.
 
 ## Development
 

@@ -70,11 +70,24 @@ test.describe("git gallery", () => {
   });
 
   // Does not perform a network clone — only checks the story chrome loads.
-  test("Clone story loads controls", async ({ page }) => {
+  test("Clone story loads connect form and controls", async ({ page }) => {
     await page.goto("/demo/gui/git/clone");
     await expect(page.getByRole("heading", { name: "Clone", level: 1 })).toBeVisible({
       timeout: 30_000,
     });
+    await expect(page.getByText("Remote connection")).toBeVisible();
+    await expect(page.getByText("URL", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("Username", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("Access token", { exact: true }).first()).toBeVisible();
     await expect(page.getByRole("button", { name: /Clone/i })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Fetch/i })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Push/i })).toBeVisible();
+    await expect(page.getByText("Workspace")).toBeVisible();
+    // Monaco mount point (web gallery debugger) must have a real height.
+    const monaco = page.locator("#git-gallery-monaco");
+    await expect(monaco).toBeVisible({ timeout: 30_000 });
+    await expect
+      .poll(async () => monaco.evaluate((el) => el.clientHeight), { timeout: 30_000 })
+      .toBeGreaterThanOrEqual(240);
   });
 });

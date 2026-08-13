@@ -110,9 +110,16 @@ pub fn App() -> Element {
         }
         document::Link { rel: "stylesheet", href: STYLES }
         // OPFS + isomorphic-git bridge for the wasm backend (no-op on desktop).
+        // Must be type=module: git-web.js imports ./git-web-helpers.js.
         document::Script {
             r#type: "module",
             src: asset!("/assets/git-web.js"),
+        }
+        // Monaco host + localStorage helpers for the Clone story (web debugger).
+        // Classic script + IIFE so double-injection (hashed + plain asset) cannot
+        // throw on redeclared const; Clone waits for globalThis.MonacoHost.
+        document::Script {
+            src: asset!("/assets/monaco-host.js"),
         }
         div { class: "{dark_class}",
             Router::<Route> {}

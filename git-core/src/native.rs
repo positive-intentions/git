@@ -1,6 +1,8 @@
-//! Native backend backed by gitoxide (`gix`).
+//! Native backend backed by gitoxide (`gix`) plus system `git` for mutations
+//! that gix does not fully cover yet (push, FF pull, checkout worktree, etc.).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::AtomicBool;
 
 use async_trait::async_trait;
@@ -8,7 +10,7 @@ use gix::bstr::ByteSlice;
 use gix::progress::Discard;
 use gix::status::index_worktree::Item as IwItem;
 
-use crate::types::{DirEntry, StatusEntry};
+use crate::types::{BranchInfo, CommitInfo, DirEntry, GitAuth, RemoteOpts, Signature, StatusEntry};
 use crate::{Error, GitRepo, Result};
 
 /// A repository opened (or created) with `gix` on the local filesystem.
@@ -109,10 +111,35 @@ impl NativeRepo {
     }
 
     /// Sync implementation of [`GitRepo::clone`].
-    pub(crate) fn clone_sync(url: &str, workdir: &str) -> Result<Self> {
+    pub(crate) fn clone_sync(url: &str, workdir: &str, opts: &RemoteOpts) -> Result<Self> {
         let path = PathBuf::from(workdir);
         ensure_parent_dir(&path)?;
         let mut prepare = gix::prepare_clone(url, &path).map_err(err_msg)?;
+        if let Some(auth) = opts.auth.as_ref().filter(|a| a.is_set()) {
+            let username = auth.username.clone();
+            let token = auth.token.clone();
+            prepare = prepare.configure_connection(move |con| {
+                let username = username.clone();
+                let token = token.clone();
+                con.set_credentials(move |action| match action {
+                    gix::credentials::helper::Action::Get(ctx) => {
+                        Ok(Some(gix::credentials::protocol::Outcome {
+                            identity: gix::sec::identity::Account {
+                                username: ctx
+                                    .username
+                                    .clone()
+                                    .unwrap_or_else(|| username.clone()),
+                                password: token.clone(),
+                                oauth_refresh_token: None,
+                            },
+                            next: gix::credentials::helper::NextAction::from(ctx),
+                        }))
+                    }
+                    _ => Ok(None),
+                });
+                Ok(())
+            });
+        }
         let (mut checkout, _outcome) = prepare
             .fetch_then_checkout(Discard, &AtomicBool::new(false))
             .map_err(err_msg)?;
@@ -199,6 +226,127 @@ impl NativeRepo {
         out.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(out)
     }
+
+    pub(crate) fn commit_sync(&self, message: &str, author: &Signature) -> Result<String> {
+        // Re-sync the index through system git so staging done via gix is visible.
+        git_run(&self.workdir, &["add", "-A"], None)?;
+        git_run(
+            &self.workdir,
+            &[
+                "-c",
+                &format!("user.name={}", author.name),
+                "-c",
+                &format!("user.email={}", author.email),
+                "commit",
+                "-m",
+                message,
+                "--allow-empty",
+            ],
+            None,
+        )?;
+        let oid = git_run(&self.workdir, &["rev-parse", "HEAD"], None)?;
+        Ok(oid.trim().to_string())
+    }
+
+    pub(crate) fn fetch_sync(&self, opts: &RemoteOpts) -> Result<()> {
+        git_run(&self.workdir, &["fetch", "origin"], opts.auth.as_ref())?;
+        Ok(())
+    }
+
+    pub(crate) fn pull_sync(&self, opts: &RemoteOpts) -> Result<()> {
+        git_run(
+            &self.workdir,
+            &["pull", "--ff-only", "origin"],
+            opts.auth.as_ref(),
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn push_sync(&self, opts: &RemoteOpts) -> Result<()> {
+        git_run(
+            &self.workdir,
+            &["push", "-u", "origin", "HEAD"],
+            opts.auth.as_ref(),
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn list_branches_sync(&self) -> Result<Vec<BranchInfo>> {
+        let out = git_run(
+            &self.workdir,
+            &["branch", "--format=%(refname:short)%09%(HEAD)"],
+            None,
+        )?;
+        let mut branches = Vec::new();
+        for line in out.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let mut parts = line.split('\t');
+            let name = parts.next().unwrap_or("").to_string();
+            let head = parts.next().unwrap_or("");
+            if name.is_empty() {
+                continue;
+            }
+            branches.push(BranchInfo {
+                name,
+                current: head == "*",
+            });
+        }
+        branches.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(branches)
+    }
+
+    pub(crate) fn create_branch_sync(&self, name: &str) -> Result<()> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(Error::new("branch name must not be empty"));
+        }
+        git_run(&self.workdir, &["branch", name], None)?;
+        Ok(())
+    }
+
+    pub(crate) fn checkout_sync(&self, name: &str) -> Result<()> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(Error::new("branch name must not be empty"));
+        }
+        git_run(&self.workdir, &["checkout", name], None)?;
+        Ok(())
+    }
+
+    pub(crate) fn log_sync(&self, max: usize) -> Result<Vec<CommitInfo>> {
+        let n = if max == 0 { 1 } else { max };
+        let out = git_run(
+            &self.workdir,
+            &[
+                "log",
+                &format!("-n{n}"),
+                "--format=%H%x00%an%x00%at%x00%s%x00%b%x1e",
+            ],
+            None,
+        )?;
+        parse_log_output(&out)
+    }
+
+    pub(crate) fn diff_file_sync(&self, rel: &str) -> Result<String> {
+        let path = normalize_rel_str(rel)?;
+        if path.is_empty() {
+            return Err(Error::new("diff path must not be empty"));
+        }
+        // `git diff HEAD -- path` shows worktree vs HEAD; exit 1 means differences.
+        let (code, stdout, stderr) =
+            git_run_code(&self.workdir, &["diff", "HEAD", "--", &path], None)?;
+        if code == 0 || code == 1 {
+            return Ok(stdout);
+        }
+        Err(Error::new(if stderr.is_empty() {
+            format!("git diff failed with exit {code}")
+        } else {
+            stderr
+        }))
+    }
 }
 
 // Thin async wrappers: `async_trait` remaps line coverage, so the real logic lives
@@ -214,8 +362,8 @@ impl GitRepo for NativeRepo {
         Self::open_sync(workdir)
     }
 
-    async fn clone(url: &str, workdir: &str, _cors_proxy: Option<&str>) -> Result<Self> {
-        Self::clone_sync(url, workdir)
+    async fn clone(url: &str, workdir: &str, opts: &RemoteOpts) -> Result<Self> {
+        Self::clone_sync(url, workdir, opts)
     }
 
     async fn list(&self, rel: &str) -> Result<Vec<DirEntry>> {
@@ -238,6 +386,42 @@ impl GitRepo for NativeRepo {
         self.status_sync()
     }
 
+    async fn commit(&self, message: &str, author: &Signature) -> Result<String> {
+        self.commit_sync(message, author)
+    }
+
+    async fn fetch(&self, opts: &RemoteOpts) -> Result<()> {
+        self.fetch_sync(opts)
+    }
+
+    async fn pull(&self, opts: &RemoteOpts) -> Result<()> {
+        self.pull_sync(opts)
+    }
+
+    async fn push(&self, opts: &RemoteOpts) -> Result<()> {
+        self.push_sync(opts)
+    }
+
+    async fn list_branches(&self) -> Result<Vec<BranchInfo>> {
+        self.list_branches_sync()
+    }
+
+    async fn create_branch(&self, name: &str) -> Result<()> {
+        self.create_branch_sync(name)
+    }
+
+    async fn checkout(&self, name: &str) -> Result<()> {
+        self.checkout_sync(name)
+    }
+
+    async fn log(&self, max: usize) -> Result<Vec<CommitInfo>> {
+        self.log_sync(max)
+    }
+
+    async fn diff_file(&self, rel: &str) -> Result<String> {
+        self.diff_file_sync(rel)
+    }
+
     fn workdir(&self) -> &str {
         workdir_as_str(&self.workdir)
     }
@@ -247,7 +431,7 @@ fn err_msg(e: impl ToString) -> Error {
     Error::new(e.to_string())
 }
 
-fn ensure_parent_dir(path: &std::path::Path) -> Result<()> {
+fn ensure_parent_dir(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -275,7 +459,7 @@ fn push_staged_if_missing(out: &mut Vec<StatusEntry>, path: String) {
 
 /// `normalize_rel` already rejects `..`; this guards pathological joins.
 #[cfg_attr(coverage_nightly, coverage(off))]
-fn ensure_under_workdir(workdir: &std::path::Path, path: &std::path::Path) -> Result<()> {
+fn ensure_under_workdir(workdir: &Path, path: &Path) -> Result<()> {
     if !path.starts_with(workdir) {
         return Err(Error::new("path escapes workdir"));
     }
@@ -294,7 +478,7 @@ fn status_without_summary(iw: &IwItem) -> String {
 
 /// Non-UTF8 workdirs are not used by gallery demos.
 #[cfg_attr(coverage_nightly, coverage(off))]
-fn workdir_as_str(path: &std::path::Path) -> &str {
+fn workdir_as_str(path: &Path) -> &str {
     path.to_str().unwrap_or("")
 }
 
@@ -327,6 +511,121 @@ fn shorten_status(raw: &str) -> String {
     } else {
         raw.chars().take(48).collect()
     }
+}
+
+fn parse_log_output(out: &str) -> Result<Vec<CommitInfo>> {
+    let mut commits = Vec::new();
+    for record in out.split('\u{1e}') {
+        let record = record.trim();
+        if record.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = record.split('\u{00}').collect();
+        if parts.len() < 4 {
+            continue;
+        }
+        let id = parts[0].to_string();
+        let author = parts[1].to_string();
+        let time = parts[2].parse::<i64>().unwrap_or(0);
+        let subject = parts[3].to_string();
+        let body = parts.get(4).map(|s| s.trim()).unwrap_or("");
+        let message = if body.is_empty() {
+            subject
+        } else {
+            format!("{subject}\n{body}")
+        };
+        commits.push(CommitInfo {
+            id,
+            message,
+            author,
+            time,
+        });
+    }
+    Ok(commits)
+}
+
+/// Run `git` in `cwd`, optionally with a one-shot askpass for HTTPS auth.
+fn git_run(cwd: &Path, args: &[&str], auth: Option<&GitAuth>) -> Result<String> {
+    let (code, stdout, stderr) = git_run_code(cwd, args, auth)?;
+    if code == 0 {
+        Ok(stdout)
+    } else {
+        Err(Error::new(if stderr.trim().is_empty() {
+            format!("git {} failed with exit {code}", args.join(" "))
+        } else {
+            stderr
+        }))
+    }
+}
+
+fn git_run_code(
+    cwd: &Path,
+    args: &[&str],
+    auth: Option<&GitAuth>,
+) -> Result<(i32, String, String)> {
+    let askpass = auth
+        .filter(|a| a.is_set())
+        .map(write_askpass_script)
+        .transpose()?;
+
+    let mut cmd = Command::new("git");
+    cmd.args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("GIT_TERMINAL_PROMPT", "0");
+
+    if let (Some(auth), Some(script)) = (auth.filter(|a| a.is_set()), askpass.as_ref()) {
+        cmd.env("GIT_ASKPASS", script);
+        cmd.env("SSH_ASKPASS", script);
+        cmd.env("GIT_USERNAME", &auth.username);
+        cmd.env("GIT_PASSWORD", &auth.token);
+        // Prefer askpass over stored helpers for this one-shot call.
+        cmd.env("GIT_CONFIG_COUNT", "1");
+        cmd.env("GIT_CONFIG_KEY_0", "credential.helper");
+        cmd.env("GIT_CONFIG_VALUE_0", "");
+    }
+
+    let output = cmd.output()?;
+    if let Some(script) = askpass {
+        let _ = std::fs::remove_file(script);
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let code = output.status.code().unwrap_or(-1);
+    Ok((code, stdout, stderr))
+}
+
+fn write_askpass_script(auth: &GitAuth) -> Result<PathBuf> {
+    let _ = auth; // credentials come from env; script only prints them.
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("git-core-askpass-{}.sh", unique_askpass_id()));
+    // Print password for Password/Token prompts; username for Username prompts.
+    let script = r#"#!/bin/sh
+case "$1" in
+  *sername*|*ser*) printf '%s' "$GIT_USERNAME" ;;
+  *) printf '%s' "$GIT_PASSWORD" ;;
+esac
+"#;
+    std::fs::write(&path, script)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&path)?.permissions();
+        perms.set_mode(0o700);
+        std::fs::set_permissions(&path, perms)?;
+    }
+    Ok(path)
+}
+
+fn unique_askpass_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    format!("{millis:x}-{}", std::process::id())
 }
 
 #[cfg(test)]

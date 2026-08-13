@@ -10,6 +10,9 @@ import {
   pathParts,
   makeStats,
   statusLabel,
+  authCallback,
+  unifiedDiff,
+  guessLanguage,
 } from "./git-web-helpers.js";
 
 const DEFAULT_CORS = "https://cors.isomorphic-git.org";
@@ -199,6 +202,15 @@ async function ensureDir(path) {
   await resolveDir(root, path, { create: true });
 }
 
+function remoteExtras(corsProxy, username, token) {
+  const opts = {};
+  const proxy = corsProxy && String(corsProxy).trim();
+  opts.corsProxy = proxy || DEFAULT_CORS;
+  const onAuth = authCallback(username, token);
+  if (onAuth) opts.onAuth = onAuth;
+  return opts;
+}
+
 async function init(workdir) {
   const { git } = await loadGit();
   await ensureDir(workdir);
@@ -206,7 +218,7 @@ async function init(workdir) {
   return null;
 }
 
-async function clone(url, workdir, corsProxy) {
+async function clone(url, workdir, corsProxy, username, token) {
   const { git, http } = await loadGit();
   await ensureDir(workdir);
   const opts = {
@@ -214,12 +226,12 @@ async function clone(url, workdir, corsProxy) {
     http,
     dir: workdir,
     url,
+    // Shallow + single branch so gallery clones finish quickly over a CORS proxy.
+    // Log/diff still work against the fetched tip history.
     singleBranch: true,
     depth: 1,
+    ...remoteExtras(corsProxy, username, token),
   };
-  const proxy = corsProxy && String(corsProxy).trim();
-  if (proxy) opts.corsProxy = proxy;
-  else opts.corsProxy = DEFAULT_CORS;
   await git.clone(opts);
   return null;
 }
@@ -279,6 +291,127 @@ async function status(workdir) {
   return out;
 }
 
+async function commit(workdir, message, name, email) {
+  const { git } = await loadGit();
+  const sha = await git.commit({
+    fs,
+    dir: workdir,
+    message: String(message || ""),
+    author: { name: String(name || "git-gallery"), email: String(email || "gallery@local") },
+  });
+  return String(sha);
+}
+
+async function fetchRemote(workdir, corsProxy, username, token) {
+  const { git, http } = await loadGit();
+  await git.fetch({
+    fs,
+    http,
+    dir: workdir,
+    remote: "origin",
+    ...remoteExtras(corsProxy, username, token),
+  });
+  return null;
+}
+
+async function pull(workdir, corsProxy, username, token) {
+  const { git, http } = await loadGit();
+  // Fast-forward only: isomorphic-git pull with fastForward: true.
+  await git.pull({
+    fs,
+    http,
+    dir: workdir,
+    remote: "origin",
+    fastForward: true,
+    singleBranch: true,
+    author: { name: "git-gallery", email: "gallery@local" },
+    ...remoteExtras(corsProxy, username, token),
+  });
+  return null;
+}
+
+async function push(workdir, corsProxy, username, token) {
+  const { git, http } = await loadGit();
+  await git.push({
+    fs,
+    http,
+    dir: workdir,
+    remote: "origin",
+    ...remoteExtras(corsProxy, username, token),
+  });
+  return null;
+}
+
+async function listBranches(workdir) {
+  const { git } = await loadGit();
+  const current = await git.currentBranch({ fs, dir: workdir, fullname: false });
+  const names = await git.listBranches({ fs, dir: workdir });
+  const out = (names || []).map((name) => ({
+    name,
+    current: name === current,
+  }));
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
+
+async function createBranch(workdir, name) {
+  const { git } = await loadGit();
+  const n = String(name || "").trim();
+  if (!n) throw new Error("branch name must not be empty");
+  await git.branch({ fs, dir: workdir, ref: n });
+  return null;
+}
+
+async function checkout(workdir, name) {
+  const { git } = await loadGit();
+  const n = String(name || "").trim();
+  if (!n) throw new Error("branch name must not be empty");
+  await git.checkout({ fs, dir: workdir, ref: n });
+  return null;
+}
+
+async function log(workdir, max) {
+  const { git } = await loadGit();
+  const n = Math.max(1, Number(max) || 1);
+  const commits = await git.log({ fs, dir: workdir, depth: n });
+  return (commits || []).map((c) => ({
+    id: c.oid || "",
+    message: (c.commit && c.commit.message) || "",
+    author: (c.commit && c.commit.author && c.commit.author.name) || "",
+    time: (c.commit && c.commit.author && c.commit.author.timestamp) || 0,
+  }));
+}
+
+async function diffFile(workdir, rel) {
+  const { git } = await loadGit();
+  const filepath = normalizeRel(rel);
+  if (!filepath) throw new Error("diff path must not be empty");
+
+  let headText = "";
+  try {
+    const { blob } = await git.readBlob({
+      fs,
+      dir: workdir,
+      oid: await git.resolveRef({ fs, dir: workdir, ref: "HEAD" }),
+      filepath,
+    });
+    headText = new TextDecoder().decode(blob);
+  } catch (_) {
+    headText = "";
+  }
+
+  let workText = "";
+  try {
+    const data = await fs.promises.readFile(joinPath(workdir, filepath), "utf8");
+    workText = typeof data === "string" ? data : new TextDecoder().decode(data);
+  } catch (_) {
+    workText = "";
+  }
+
+  if (headText === workText) return "";
+  return unifiedDiff(filepath, headText, workText);
+}
+
 globalThis.GitWeb = {
   init,
   clone,
@@ -287,4 +420,16 @@ globalThis.GitWeb = {
   writeFile,
   removeFile,
   status,
+  commit,
+  fetch: fetchRemote,
+  pull,
+  push,
+  listBranches,
+  createBranch,
+  checkout,
+  log,
+  diffFile,
 };
+
+// Re-export for gallery Monaco language hints (optional).
+globalThis.GitWebHelpers = { guessLanguage };

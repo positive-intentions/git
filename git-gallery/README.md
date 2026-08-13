@@ -28,7 +28,7 @@ dx serve --bin git-gallery --platform desktop
 | Init | `GitRepo::init` |
 | Files | write / read / edit / remove / list |
 | Status | mutations + `status` |
-| Clone | `clone` (+ CORS proxy on web) |
+| Clone | authenticated clone + commit / branches / log / diff / fetch / pull / push; Monaco on web |
 
 ## Coverage page
 

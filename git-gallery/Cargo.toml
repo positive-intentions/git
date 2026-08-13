@@ -22,6 +22,8 @@ whatsup-ui = { git = "https://github.com/positive-intentions/whatsup-ui", defaul
   "gallery",
 ] }
 getrandom = { version = "0.2", features = ["js"], optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [features]
 default = ["web"]
