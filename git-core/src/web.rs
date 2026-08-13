@@ -39,6 +39,13 @@ extern "C" {
     #[wasm_bindgen(js_namespace = GitWeb, js_name = removeFile, catch)]
     async fn js_remove_file(workdir: &str, rel: &str) -> std::result::Result<JsValue, JsValue>;
 
+    #[wasm_bindgen(js_namespace = GitWeb, js_name = rename, catch)]
+    async fn js_rename(
+        workdir: &str,
+        from: &str,
+        to: &str,
+    ) -> std::result::Result<JsValue, JsValue>;
+
     #[wasm_bindgen(js_namespace = GitWeb, js_name = status, catch)]
     async fn js_status(workdir: &str) -> std::result::Result<JsValue, JsValue>;
 
@@ -68,6 +75,22 @@ extern "C" {
 
     #[wasm_bindgen(js_namespace = GitWeb, js_name = push, catch)]
     async fn js_push(
+        workdir: &str,
+        cors_proxy: &str,
+        username: &str,
+        token: &str,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(js_namespace = GitWeb, js_name = resetToRemote, catch)]
+    async fn js_reset_to_remote(
+        workdir: &str,
+        cors_proxy: &str,
+        username: &str,
+        token: &str,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(js_namespace = GitWeb, js_name = pushForceWithLease, catch)]
+    async fn js_push_force_with_lease(
         workdir: &str,
         cors_proxy: &str,
         username: &str,
@@ -175,6 +198,11 @@ impl GitRepo for WebRepo {
         Ok(())
     }
 
+    async fn rename(&self, from: &str, to: &str) -> Result<()> {
+        js_rename(&self.workdir, from, to).await.map_err(js_err)?;
+        Ok(())
+    }
+
     async fn status(&self) -> Result<Vec<StatusEntry>> {
         let value = js_status(&self.workdir).await.map_err(js_err)?;
         from_js(value)
@@ -208,6 +236,22 @@ impl GitRepo for WebRepo {
     async fn push(&self, opts: &RemoteOpts) -> Result<()> {
         let (cors, user, token) = auth_parts(opts);
         js_push(&self.workdir, &cors, &user, &token)
+            .await
+            .map_err(js_err)?;
+        Ok(())
+    }
+
+    async fn reset_to_remote(&self, opts: &RemoteOpts) -> Result<()> {
+        let (cors, user, token) = auth_parts(opts);
+        js_reset_to_remote(&self.workdir, &cors, &user, &token)
+            .await
+            .map_err(js_err)?;
+        Ok(())
+    }
+
+    async fn push_force_with_lease(&self, opts: &RemoteOpts) -> Result<()> {
+        let (cors, user, token) = auth_parts(opts);
+        js_push_force_with_lease(&self.workdir, &cors, &user, &token)
             .await
             .map_err(js_err)?;
         Ok(())
@@ -265,11 +309,14 @@ mod tests {
               readFile: async (_workdir, _rel) => new Uint8Array([104, 105]),
               writeFile: async (_workdir, _rel, _data) => null,
               removeFile: async (_workdir, _rel) => null,
+              rename: async (_workdir, _from, _to) => null,
               status: async (_workdir) => [{ path: "hello.txt", status: "staged" }],
               commit: async (_workdir, _msg, _name, _email) => "abc123",
               fetch: async (_workdir, _cors, _u, _t) => null,
               pull: async (_workdir, _cors, _u, _t) => null,
               push: async (_workdir, _cors, _u, _t) => null,
+              resetToRemote: async (_workdir, _cors, _u, _t) => null,
+              pushForceWithLease: async (_workdir, _cors, _u, _t) => null,
               listBranches: async (_workdir) => [{ name: "main", current: true }],
               createBranch: async (_workdir, _name) => null,
               checkout: async (_workdir, _name) => null,
@@ -293,11 +340,14 @@ mod tests {
               readFile: async () => { throw "read failed"; },
               writeFile: async () => { throw "write failed"; },
               removeFile: async () => { throw "remove failed"; },
+              rename: async () => { throw "rename failed"; },
               status: async () => { throw "status failed"; },
               commit: async () => { throw "commit failed"; },
               fetch: async () => { throw "fetch failed"; },
               pull: async () => { throw "pull failed"; },
               push: async () => { throw "push failed"; },
+              resetToRemote: async () => { throw "reset failed"; },
+              pushForceWithLease: async () => { throw "force push failed"; },
               listBranches: async () => { throw "branches failed"; },
               createBranch: async () => { throw "create failed"; },
               checkout: async () => { throw "checkout failed"; },
@@ -319,11 +369,14 @@ mod tests {
               readFile: async () => [65, 66],
               writeFile: async () => null,
               removeFile: async () => null,
+              rename: async () => null,
               status: async () => [],
               commit: async () => "x",
               fetch: async () => null,
               pull: async () => null,
               push: async () => null,
+              resetToRemote: async () => null,
+              pushForceWithLease: async () => null,
               listBranches: async () => [],
               createBranch: async () => null,
               checkout: async () => null,
@@ -401,6 +454,7 @@ mod tests {
         assert_eq!(bytes, b"hi");
 
         repo.write_file("hello.txt", b"hi").await.expect("write");
+        repo.rename("hello.txt", "hi.txt").await.expect("rename");
         repo.remove_file("hello.txt").await.expect("remove");
 
         let oid = repo
@@ -425,6 +479,8 @@ mod tests {
         repo.fetch(&opts).await.expect("fetch");
         repo.pull(&opts).await.expect("pull");
         repo.push(&opts).await.expect("push");
+        repo.reset_to_remote(&opts).await.expect("reset");
+        repo.push_force_with_lease(&opts).await.expect("force push");
 
         let cloned = WebRepo::clone(
             "https://example.com/r.git",
@@ -477,6 +533,9 @@ mod tests {
         let err = repo.remove_file("a").await.expect_err("remove");
         assert!(err.to_string().contains("remove failed"));
 
+        let err = repo.rename("a", "b").await.expect_err("rename");
+        assert!(err.to_string().contains("rename failed"));
+
         let err = repo.status().await.expect_err("status");
         assert!(err.to_string().contains("status failed"));
 
@@ -494,6 +553,18 @@ mod tests {
 
         let err = repo.push(&RemoteOpts::default()).await.expect_err("push");
         assert!(err.to_string().contains("push failed"));
+
+        let err = repo
+            .reset_to_remote(&RemoteOpts::default())
+            .await
+            .expect_err("reset");
+        assert!(err.to_string().contains("reset failed"));
+
+        let err = repo
+            .push_force_with_lease(&RemoteOpts::default())
+            .await
+            .expect_err("force push");
+        assert!(err.to_string().contains("force push failed"));
 
         let err = repo.list_branches().await.expect_err("branches");
         assert!(err.to_string().contains("branches failed"));

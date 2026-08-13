@@ -161,9 +161,15 @@ impl NativeRepo {
                 continue;
             }
             let file_type = item.file_type()?;
+            let size_bytes = if file_type.is_dir() {
+                None
+            } else {
+                item.metadata().ok().map(|m| m.len())
+            };
             entries.push(DirEntry {
                 path: name,
                 is_dir: file_type.is_dir(),
+                size_bytes,
             });
         }
         entries.sort_by(|a, b| a.path.cmp(&b.path));
@@ -190,6 +196,22 @@ impl NativeRepo {
     pub(crate) fn remove_file_sync(&self, rel: &str) -> Result<()> {
         let repo = self.open_repo()?;
         self.unstage_and_delete(&repo, rel)?;
+        Ok(())
+    }
+
+    /// Sync implementation of [`GitRepo::rename`].
+    pub(crate) fn rename_sync(&self, from: &str, to: &str) -> Result<()> {
+        let from = normalize_rel_str(from)?;
+        let to = normalize_rel_str(to)?;
+        if from.is_empty() || to.is_empty() {
+            return Err(Error::new("rename paths must not be empty"));
+        }
+        if from == to {
+            return Ok(());
+        }
+        let dest = self.abs(&to)?;
+        ensure_parent_dir(&dest)?;
+        git_run(&self.workdir, &["mv", "-f", &from, &to], None)?;
         Ok(())
     }
 
@@ -266,6 +288,32 @@ impl NativeRepo {
         git_run(
             &self.workdir,
             &["push", "-u", "origin", "HEAD"],
+            opts.auth.as_ref(),
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn reset_to_remote_sync(&self, opts: &RemoteOpts) -> Result<()> {
+        self.fetch_sync(opts)?;
+        let branch = self
+            .list_branches_sync()?
+            .into_iter()
+            .find(|b| b.current)
+            .map(|b| b.name)
+            .ok_or_else(|| Error::new("no current branch for reset_to_remote"))?;
+        let remote_ref = format!("origin/{branch}");
+        git_run(
+            &self.workdir,
+            &["reset", "--hard", &remote_ref],
+            opts.auth.as_ref(),
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn push_force_with_lease_sync(&self, opts: &RemoteOpts) -> Result<()> {
+        git_run(
+            &self.workdir,
+            &["push", "--force-with-lease", "-u", "origin", "HEAD"],
             opts.auth.as_ref(),
         )?;
         Ok(())
@@ -382,6 +430,10 @@ impl GitRepo for NativeRepo {
         self.remove_file_sync(rel)
     }
 
+    async fn rename(&self, from: &str, to: &str) -> Result<()> {
+        self.rename_sync(from, to)
+    }
+
     async fn status(&self) -> Result<Vec<StatusEntry>> {
         self.status_sync()
     }
@@ -400,6 +452,14 @@ impl GitRepo for NativeRepo {
 
     async fn push(&self, opts: &RemoteOpts) -> Result<()> {
         self.push_sync(opts)
+    }
+
+    async fn reset_to_remote(&self, opts: &RemoteOpts) -> Result<()> {
+        self.reset_to_remote_sync(opts)
+    }
+
+    async fn push_force_with_lease(&self, opts: &RemoteOpts) -> Result<()> {
+        self.push_force_with_lease_sync(opts)
     }
 
     async fn list_branches(&self) -> Result<Vec<BranchInfo>> {

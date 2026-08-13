@@ -42,6 +42,9 @@ pub trait GitRepo: Sized {
     /// Remove a file from the worktree and index (`git rm`).
     async fn remove_file(&self, rel: &str) -> Result<()>;
 
+    /// Rename / move a file or directory in the worktree and stage the change.
+    async fn rename(&self, from: &str, to: &str) -> Result<()>;
+
     /// Working tree / index status entries.
     async fn status(&self) -> Result<Vec<StatusEntry>>;
 
@@ -58,6 +61,14 @@ pub trait GitRepo: Sized {
 
     /// Push the current branch to `origin`.
     async fn push(&self, opts: &RemoteOpts) -> Result<()>;
+
+    /// Fetch `origin` and hard-reset the current branch to `origin/<branch>`.
+    /// Used when resolving sync conflicts by accepting the remote version.
+    async fn reset_to_remote(&self, opts: &RemoteOpts) -> Result<()>;
+
+    /// Force-push the current branch with lease (`--force-with-lease`).
+    /// Used when resolving sync conflicts by keeping the local version.
+    async fn push_force_with_lease(&self, opts: &RemoteOpts) -> Result<()>;
 
     /// List local branches.
     async fn list_branches(&self) -> Result<Vec<BranchInfo>>;

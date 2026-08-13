@@ -145,10 +145,30 @@ fn nested_paths_and_list_dot() {
     assert!(root.iter().any(|e| e.path == "notes" && e.is_dir));
 
     let nested = repo.list_sync("notes").expect("list notes");
-    assert!(nested.iter().any(|e| e.path == "a.txt" && !e.is_dir));
+    let a = nested
+        .iter()
+        .find(|e| e.path == "a.txt" && !e.is_dir)
+        .expect("a.txt");
+    assert_eq!(a.size_bytes, Some(6));
 
     let bytes = repo.read_file_sync("notes/a.txt").expect("read");
     assert_eq!(bytes, b"nested");
+}
+
+#[test]
+fn rename_file_and_errors() {
+    let dir = temp_dir();
+    let path = dir_str(&dir);
+    let repo = NativeRepo::init_sync(&path).expect("init");
+    repo.write_file_sync("old.txt", b"data").expect("write");
+    repo.rename_sync("old.txt", "dir/new.txt").expect("rename");
+    assert!(repo.read_file_sync("dir/new.txt").is_ok());
+    assert!(repo.read_file_sync("old.txt").is_err());
+
+    let err = repo.rename_sync("", "x").expect_err("empty from");
+    assert!(err.to_string().contains("empty"));
+    repo.rename_sync("dir/new.txt", "dir/new.txt")
+        .expect("noop rename");
 }
 
 #[test]

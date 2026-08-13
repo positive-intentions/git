@@ -31,6 +31,12 @@ gui = ["dep:dioxus"]
 web = ["gui", "dioxus/web", "whatsup-ui/web", "dep:getrandom"]
 desktop = ["gui", "dioxus/desktop", "whatsup-ui/desktop"]
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+gloo-timers = { version = "0.3", features = ["futures"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+futures-timer = "3"
+
 [patch."https://github.com/positive-intentions/whatsup-ui"]
 whatsup-ui = { path = "../../whatsup-ui" }
 

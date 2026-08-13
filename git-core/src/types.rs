@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 pub struct DirEntry {
     pub path: String,
     pub is_dir: bool,
+    /// File size in bytes when known. Directories are typically `None`.
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
 }
 
 /// A single status line (path + short status label).

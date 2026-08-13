@@ -148,3 +148,24 @@ pub fn MonoBlock(text: String) -> Element {
         }
     }
 }
+
+/// Labeled text / password input used by Clone and Storage connect forms.
+#[component]
+pub fn FormField(
+    label: String,
+    value: String,
+    input_type: String,
+    oninput: EventHandler<String>,
+) -> Element {
+    rsx! {
+        label { class: "flex flex-col gap-1 text-sm",
+            span { class: "text-slate-600", "{label}" }
+            input {
+                r#type: "{input_type}",
+                class: "rounded-md border border-slate-300 px-2 py-1.5 font-mono text-sm",
+                value: "{value}",
+                oninput: move |e| oninput.call(e.value()),
+            }
+        }
+    }
+}

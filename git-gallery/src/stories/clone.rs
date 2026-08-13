@@ -9,8 +9,8 @@ use git_core::{
 use whatsup_ui::components::atoms::BodyText;
 
 use crate::chrome::{
-    ActionRow, DemoShell, MonoBlock, PrimaryButton, SecondaryButton, StatusBanner, StatusList,
-    StatusMsg,
+    ActionRow, DemoShell, FormField, MonoBlock, PrimaryButton, SecondaryButton, StatusBanner,
+    StatusList, StatusMsg,
 };
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -690,26 +690,6 @@ fn CloneDemo() -> Element {
                     SecondaryButton { label: "Refresh log".to_string(), onclick: on_log }
                 }
                 CommitList { entries: commits() }
-            }
-        }
-    }
-}
-
-#[component]
-fn FormField(
-    label: String,
-    value: String,
-    input_type: String,
-    oninput: EventHandler<String>,
-) -> Element {
-    rsx! {
-        label { class: "flex flex-col gap-1 text-sm",
-            span { class: "text-slate-600", "{label}" }
-            input {
-                r#type: "{input_type}",
-                class: "rounded-md border border-slate-300 px-2 py-1.5 font-mono text-sm",
-                value: "{value}",
-                oninput: move |e| oninput.call(e.value()),
             }
         }
     }

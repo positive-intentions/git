@@ -5,10 +5,17 @@ fn dir_entry_serde_roundtrip() {
     let entry = DirEntry {
         path: "notes".into(),
         is_dir: true,
+        size_bytes: None,
     };
     let json = serde_json::to_string(&entry).expect("serialize");
     let back: DirEntry = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back, entry);
+
+    // Older payloads without size_bytes still deserialize.
+    let legacy: DirEntry =
+        serde_json::from_str(r#"{"path":"a.txt","is_dir":false}"#).expect("legacy");
+    assert_eq!(legacy.path, "a.txt");
+    assert_eq!(legacy.size_bytes, None);
 }
 
 #[test]

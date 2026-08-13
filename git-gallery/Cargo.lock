@@ -2106,8 +2106,10 @@ name = "git-gallery"
 version = "0.1.0"
 dependencies = [
  "dioxus",
+ "futures-timer",
  "getrandom 0.2.17",
  "git-core",
+ "gloo-timers",
  "serde",
  "serde_json",
  "whatsup-ui",

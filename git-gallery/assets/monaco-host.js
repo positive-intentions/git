@@ -208,9 +208,9 @@
 
   const STORAGE_KEY = "git-gallery:clone";
 
-  function storageLoad() {
+  function storageLoad(key) {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      const raw = localStorage.getItem(key || STORAGE_KEY);
       if (!raw) return null;
       return JSON.parse(raw);
     } catch (_) {
@@ -218,14 +218,59 @@
     }
   }
 
-  function storageSave(data) {
+  function storageSave(data, key) {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      localStorage.setItem(key || STORAGE_KEY, JSON.stringify(data));
     } catch (_) {
       /* quota / private mode */
     }
     return null;
   }
+
+  /** Pending OS file drops captured from `[data-file-explorer-drop]` targets. */
+  let pendingDrops = null;
+
+  function installDropCapture() {
+    if (globalThis.__gitGalleryDropInstalled) return;
+    globalThis.__gitGalleryDropInstalled = true;
+    document.addEventListener(
+      "drop",
+      (e) => {
+        const target = e.target && e.target.closest
+          ? e.target.closest("[data-file-explorer-drop]")
+          : null;
+        if (!target || !e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) {
+          return;
+        }
+        const files = Array.from(e.dataTransfer.files);
+        pendingDrops = Promise.all(
+          files.map(
+            (f) =>
+              new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                  const buf = new Uint8Array(reader.result);
+                  resolve({ name: f.name, data: Array.from(buf) });
+                };
+                reader.onerror = () => reject(reader.error || new Error("read failed"));
+                reader.readAsArrayBuffer(f);
+              })
+          )
+        ).catch(() => []);
+      },
+      true
+    );
+  }
+
+  async function consumeDroppedFiles() {
+    installDropCapture();
+    const p = pendingDrops;
+    pendingDrops = null;
+    if (!p) return [];
+    return await p;
+  }
+
+  installDropCapture();
 
   globalThis.MonacoHost = {
     mount,
@@ -236,5 +281,6 @@
     dispose,
     storageLoad,
     storageSave,
+    consumeDroppedFiles,
   };
 })();

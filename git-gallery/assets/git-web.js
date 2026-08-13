@@ -243,7 +243,16 @@ async function list(workdir, rel) {
   const out = [];
   for await (const [name, handle] of dir.entries()) {
     if (name === ".git") continue;
-    out.push({ path: name, is_dir: handle.kind === "directory" });
+    let size_bytes = null;
+    if (handle.kind === "file") {
+      try {
+        const file = await handle.getFile();
+        size_bytes = file.size;
+      } catch (_) {
+        size_bytes = null;
+      }
+    }
+    out.push({ path: name, is_dir: handle.kind === "directory", size_bytes });
   }
   out.sort((a, b) => a.path.localeCompare(b.path));
   return out;
@@ -275,6 +284,100 @@ async function removeFile(workdir, rel) {
       await fs.promises.unlink(path);
     } catch (e) {
       /* ignore missing */
+    }
+  }
+  return null;
+}
+
+async function walkFiles(dirPath, prefix = "") {
+  const names = await fs.promises.readdir(dirPath);
+  const out = [];
+  for (const name of names) {
+    if (name === ".git") continue;
+    const rel = prefix ? `${prefix}/${name}` : name;
+    const full = joinPath(dirPath, name);
+    let st;
+    try {
+      st = await fs.promises.stat(full);
+    } catch (_) {
+      continue;
+    }
+    if (st.isDirectory()) {
+      out.push(...(await walkFiles(full, rel)));
+    } else {
+      out.push(rel);
+    }
+  }
+  return out;
+}
+
+async function rename(workdir, from, to) {
+  const { git } = await loadGit();
+  const src = normalizeRel(from);
+  const dst = normalizeRel(to);
+  if (!src || !dst) throw new Error("rename paths must not be empty");
+  if (src === dst) return null;
+
+  const srcPath = joinPath(workdir, src);
+  const dstPath = joinPath(workdir, dst);
+  const srcStat = await fs.promises.stat(srcPath);
+  // Ensure destination parent exists.
+  const dstParts = pathParts(dstPath);
+  dstParts.pop();
+  if (dstParts.length) {
+    await fs.promises.mkdir(dstParts.join("/")).catch(() => {});
+  }
+
+  if (srcStat.isDirectory()) {
+    const files = await walkFiles(srcPath, src);
+    // Copy tree then remove source (OPFS has no reliable dir rename).
+    async function copyDir(fromDir, toDir) {
+      await fs.promises.mkdir(toDir).catch(() => {});
+      for (const name of await fs.promises.readdir(fromDir)) {
+        const fromChild = joinPath(fromDir, name);
+        const toChild = joinPath(toDir, name);
+        const st = await fs.promises.stat(fromChild);
+        if (st.isDirectory()) {
+          await copyDir(fromChild, toChild);
+        } else {
+          const data = await fs.promises.readFile(fromChild);
+          await fs.promises.writeFile(toChild, data);
+        }
+      }
+    }
+    async function rmrf(path) {
+      const root = await getRoot();
+      const { dir, name } = await resolveParent(root, path, { create: false });
+      await dir.removeEntry(name, { recursive: true });
+    }
+    await copyDir(srcPath, dstPath);
+    for (const rel of files) {
+      const newRel = dst + rel.slice(src.length);
+      try {
+        await git.remove({ fs, dir: workdir, filepath: rel });
+      } catch (_) {
+        /* may be untracked */
+      }
+      await git.add({ fs, dir: workdir, filepath: newRel });
+    }
+    await rmrf(srcPath);
+  } else {
+    const data = await fs.promises.readFile(srcPath);
+    await fs.promises.writeFile(dstPath, data);
+    try {
+      await git.remove({ fs, dir: workdir, filepath: src });
+    } catch (_) {
+      try {
+        await fs.promises.unlink(srcPath);
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    await git.add({ fs, dir: workdir, filepath: dst });
+    try {
+      await fs.promises.unlink(srcPath);
+    } catch (_) {
+      /* already removed via git.remove */
     }
   }
   return null;
@@ -337,6 +440,68 @@ async function push(workdir, corsProxy, username, token) {
     http,
     dir: workdir,
     remote: "origin",
+    ...remoteExtras(corsProxy, username, token),
+  });
+  return null;
+}
+
+async function resetToRemote(workdir, corsProxy, username, token) {
+  const { git, http } = await loadGit();
+  await git.fetch({
+    fs,
+    http,
+    dir: workdir,
+    remote: "origin",
+    ...remoteExtras(corsProxy, username, token),
+  });
+  const branch =
+    (await git.currentBranch({ fs, dir: workdir, fullname: false })) || "main";
+  const remoteRef = `origin/${branch}`;
+  // Hard reset worktree to remote tip.
+  await git.checkout({
+    fs,
+    dir: workdir,
+    ref: remoteRef,
+    force: true,
+  });
+  // Stay on the local branch name pointing at that commit.
+  try {
+    await git.branch({
+      fs,
+      dir: workdir,
+      ref: branch,
+      checkout: true,
+      force: true,
+    });
+  } catch (_) {
+    await git.checkout({ fs, dir: workdir, ref: branch, force: true });
+  }
+  // Align HEAD to remote oid when branch force fails on shallow clones.
+  try {
+    const oid = await git.resolveRef({ fs, dir: workdir, ref: remoteRef });
+    await git.writeRef({
+      fs,
+      dir: workdir,
+      ref: `refs/heads/${branch}`,
+      value: oid,
+      force: true,
+    });
+    await git.checkout({ fs, dir: workdir, ref: branch, force: true });
+  } catch (_) {
+    /* best effort */
+  }
+  return null;
+}
+
+async function pushForceWithLease(workdir, corsProxy, username, token) {
+  const { git, http } = await loadGit();
+  // isomorphic-git supports `force`; lease is best-effort via force flag.
+  await git.push({
+    fs,
+    http,
+    dir: workdir,
+    remote: "origin",
+    force: true,
     ...remoteExtras(corsProxy, username, token),
   });
   return null;
@@ -419,11 +584,14 @@ globalThis.GitWeb = {
   readFile,
   writeFile,
   removeFile,
+  rename,
   status,
   commit,
   fetch: fetchRemote,
   pull,
   push,
+  resetToRemote,
+  pushForceWithLease,
   listBranches,
   createBranch,
   checkout,
