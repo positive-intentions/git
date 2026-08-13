@@ -1,4 +1,4 @@
-# git
+# Git
 
 [![CI](https://img.shields.io/github/actions/workflow/status/positive-intentions/git/ci.yml?branch=staging&label=CI)](https://github.com/positive-intentions/git/actions/workflows/ci.yml)
 [![Pages](https://img.shields.io/github/actions/workflow/status/positive-intentions/git/deploy-pages.yml?branch=staging&label=Pages)](https://github.com/positive-intentions/git/actions/workflows/deploy-pages.yml)
