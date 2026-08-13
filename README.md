@@ -1,6 +1,8 @@
 # git
 
 [![CI](https://img.shields.io/github/actions/workflow/status/positive-intentions/git/ci.yml?branch=staging&label=CI)](https://github.com/positive-intentions/git/actions/workflows/ci.yml)
+[![Pages](https://img.shields.io/github/actions/workflow/status/positive-intentions/git/deploy-pages.yml?branch=staging&label=Pages)](https://github.com/positive-intentions/git/actions/workflows/deploy-pages.yml)
+[![Gallery](https://img.shields.io/badge/gallery-live-brightgreen)](https://positive-intentions.github.io/git/)
 
 Interactive demos for basic Git operations, using a shared Rust `GitRepo` API and a
 [whatsup-ui](https://github.com/positive-intentions/whatsup-ui) gallery (same pattern as
@@ -10,6 +12,8 @@ Interactive demos for basic Git operations, using a shared Rust `GitRepo` API an
 |-------|------|
 | [`git-core`](git-core/) | `GitRepo` trait + platform backends |
 | [`git-gallery`](git-gallery/) | Dioxus + whatsup-ui demos (standalone package) |
+
+**Live gallery:** [positive-intentions.github.io/git](https://positive-intentions.github.io/git/)
 
 ## Dual backend
 
@@ -101,6 +105,15 @@ cargo clippy -p git-core --all-targets -- -D warnings
 - Untestable native edges (path-escape after `..` rejection, non-UTF8 workdirs, rare
   status shapes) are marked with `#[cfg_attr(coverage_nightly, coverage(off))]`.
 - Open the gallery **Coverage** page (`/coverage`) after generating the HTML report.
+
+## Deploy (GitHub Pages)
+
+Push to **`staging`** (or run **Deploy to GitHub Pages** via `workflow_dispatch`) builds a
+release web gallery with llvm-cov HTML baked in and deploys to
+[GitHub Pages](https://positive-intentions.github.io/git/).
+
+Pages source must be **GitHub Actions** (Settings → Pages). The workflow sets Dioxus
+`base_path = "git"` so assets and routes resolve under `/git/`.
 
 ## Layout notes
 
